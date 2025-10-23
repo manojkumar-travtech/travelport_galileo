@@ -1,3 +1,4 @@
+import { ConnectionPool } from "mssql";
 import {
   makeFirstDataSoapEnvelope,
   makeMoreDataEnvelope,
@@ -9,9 +10,14 @@ import {
   bulkInsertOfficers,
   processOfficerProfilesByJob,
 } from "./gwsOfficersService";
+import DatabaseConnection from "../database/connection";
 
 export const runGwsJob = async (initialToken: string) => {
-  const jobId = await createJob(initialToken);
+  console.log('Job Started')
+  const db = DatabaseConnection.getInstance();
+  const pool = await db.connect();
+
+  const jobId = await createJob(pool, initialToken);
 
   try {
     let officers: any[] = [];
@@ -19,6 +25,9 @@ export const runGwsJob = async (initialToken: string) => {
     let firstCall = true;
     let hasMore = true;
     let iteration: number = 0;
+    const BATCH_SIZE = 500;
+    let totalCount = 0;
+
     while (hasMore) {
       const soapXml = firstCall
         ? makeFirstDataSoapEnvelope(token)
@@ -27,6 +36,14 @@ export const runGwsJob = async (initialToken: string) => {
       const parsedData = await parseTravelportGwsOfficersXmlToJson(xmlResponse);
 
       officers.push(...parsedData);
+
+      if (officers.length >= BATCH_SIZE) {
+        await bulkInsertOfficers(pool,jobId, officers);
+        totalCount += officers.length;
+        officers = [];
+        global.gc?.();
+      }
+
       const hasMoreData =
         xmlResponse.includes("<MoreData>") ||
         xmlResponse.includes("<MoreData />");
@@ -37,14 +54,18 @@ export const runGwsJob = async (initialToken: string) => {
         hasMore = false;
       }
     }
-    await bulkInsertOfficers(jobId, officers);
-    await updateJobStatus(jobId, "Completed", officers.length);
-    await processOfficerProfilesByJob(jobId, token);
+    if (officers.length > 0) {
+      await bulkInsertOfficers(pool, jobId, officers);
+      totalCount += officers.length;
+    }
+    await updateJobStatus(pool, jobId, "Processing");
+    await processOfficerProfilesByJob(pool,jobId,token);
+    await updateJobStatus(pool, jobId, "Completed", officers.length);
 
     return "Job Finished Successfully";
   } catch (error: any) {
     const err = error.response?.data || error.message;
-    await updateJobStatus(jobId, "Completed", 0, err);
+    await updateJobStatus(pool, jobId, "Failed", 0, err);
 
     throw error;
   }

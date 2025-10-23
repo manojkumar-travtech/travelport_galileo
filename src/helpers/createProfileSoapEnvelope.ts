@@ -1,11 +1,7 @@
+import { createParentSoapEnvelope } from "../utils/createSoapEnvelope";
+
 export const createSoapEnvelope = (token: string, xml: string): string => {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-        <SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"
-                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                   xmlns:SOAP-ENC="http://schemas.xmlsoap.org/soap/encoding/"
-                   xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-            <SOAP-ENV:Body>
-                <m:SubmitXmlOnSession xmlns:m="http://webservices.galileo.com">
+  const envelope = `<m:SubmitXmlOnSession xmlns:m="http://webservices.galileo.com">
                     <m:Token>${token}</m:Token>
                         <m:Request>
                             <ClientFile_2>
@@ -17,9 +13,8 @@ export const createSoapEnvelope = (token: string, xml: string): string => {
                         <m:Filter>
                             <_/>
                         </m:Filter>
-                </m:SubmitXmlOnSession>
-            </SOAP-ENV:Body>
-        </SOAP-ENV:Envelope>`;
+                </m:SubmitXmlOnSession>`;
+  return createParentSoapEnvelope(envelope);
 };
 
 export const makeFirstDataSoapEnvelope = (token: string) => {

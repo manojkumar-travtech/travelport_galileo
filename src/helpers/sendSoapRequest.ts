@@ -1,4 +1,4 @@
-import axios, { AxiosError } from "axios";
+import axios from "axios";
 import { TRAVELPORT_CONFIG } from "../config/soap.config";
 
 export const sendSoapRequest = async (soapXml: string): Promise<string> => {

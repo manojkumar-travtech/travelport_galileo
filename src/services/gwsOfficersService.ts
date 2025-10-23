@@ -1,7 +1,9 @@
-import sql from "mssql";
-import DatabaseConnection from "../database/connection";
-import { getEachProfileDetailsOfTraveller } from "./gwsOfficerProfilesService";
-import { chunkArray } from "../utils/createChunks";
+import sql, { ConnectionPool } from "mssql";
+import {
+  bulkInsertOfficerProfiles,
+  getGwsProfileDetails,
+} from "./gwsOfficerProfilesService";
+import pLimit from "p-limit";
 
 interface Officer {
   FileInd: string;
@@ -9,48 +11,44 @@ interface Officer {
   XmlResponse?: string;
 }
 
-export async function bulkInsertOfficers(jobId: number, officers: Officer[]) {
+export async function bulkInsertOfficers(
+  pool: ConnectionPool,
+  jobId: number,
+  officers: Officer[]
+) {
   if (!officers.length) return;
 
-  const db = DatabaseConnection.getInstance();
-  const pool = await db.connect();
+  try {
+    const table = new sql.Table("gws_officers");
+    table.create = false;
 
-  const chunks = chunkArray(officers, 10000);
+    table.columns.add("JobId", sql.Int, { nullable: false });
+    table.columns.add("FileInd", sql.NVarChar(50), { nullable: false });
+    table.columns.add("Title", sql.NVarChar(512), { nullable: false });
+    table.columns.add("XmlResponse", sql.NVarChar(sql.MAX), { nullable: true });
 
-  for (const batch of chunks) {
-    try {
-      const table = new sql.Table("gws_officers");
-      table.create = false;
-      table.columns.add("JobId", sql.Int, { nullable: false });
-      table.columns.add("FileInd", sql.NVarChar(50), { nullable: false });
-      table.columns.add("Title", sql.NVarChar(512), { nullable: false });
-      table.columns.add("XmlResponse", sql.NVarChar(sql.MAX), {
-        nullable: true,
-      });
-
-      batch.forEach((o) => {
-        const fileInd = o.FileInd || "";
-        const title = o.Title || "";
-        table.rows.add(jobId, fileInd, title, o.XmlResponse || null);
-      });
-
-      await pool.request().bulk(table);
-    } catch (error) {
-      console.error("❌ Failed to bulk insert officers batch:", error);
-      // You can decide to continue or throw depending on requirements
-      throw error;
+    for (const o of officers) {
+      table.rows.add(
+        jobId,
+        o.FileInd || "",
+        o.Title || "",
+        o.XmlResponse || null
+      );
     }
+
+    await pool.request().bulk(table);
+  } catch (error) {
+    console.error("❌ Failed to bulk insert officers:", error);
+    throw error;
   }
 }
 
 export async function getOfficersBatchByJob(
   jobId: number,
   offset: number,
-  batchSize: number = 10
+  batchSize: number = 10,
+  pool: ConnectionPool
 ) {
-  const db = DatabaseConnection.getInstance();
-  const pool = await db.connect();
-
   const result = await pool
     .request()
     .input("JobId", sql.Int, jobId)
@@ -68,30 +66,53 @@ export async function getOfficersBatchByJob(
 }
 
 export async function processOfficerProfilesByJob(
+  pool: ConnectionPool,
   jobId: number,
   token: string
 ) {
-  const batchSize = 10;
+  const batchSize = 100;
+  const concurrencyLimit = 1;
+  const limit = pLimit(concurrencyLimit);
+
   let offset = 0;
-  let batch: any[] = [];
 
-  do {
-    batch = await getOfficersBatchByJob(jobId, offset, batchSize);
-
+  while (true) {
+    const batch = await getOfficersBatchByJob(jobId, offset, batchSize, pool);
     if (batch.length === 0) break;
 
-    for (const officer of batch) {
-      try {
-        await getEachProfileDetailsOfTraveller(token, officer);
-      } catch (err) {
-        console.error(`Failed for officer ${officer.Title}:`, err);
-      }
-    }
+    console.log(`📦 Processing batch starting at offset ${offset}`);
 
-    console.log(`✅ Processed batch starting at offset ${offset}`);
+    // ✅ Run SOAP calls concurrently
+    const profileResults = await Promise.allSettled(
+      batch.map((officer) => limit(() => getGwsProfileDetails(token, officer)))
+    );
+
+    // ✅ Collect successful and failed profiles
+    const profilesToInsert = profileResults.map((res, i) => {
+      const officer = batch[i];
+      if (res.status === "fulfilled") {
+        return {
+          OfficerId: officer.OfficerId,
+          RequestPayload: res.value.RequestPayload,
+          ResponsePayload: res.value.ResponsePayload,
+          ErrorMessage: null,
+        };
+      } else {
+        const errMsg = res.reason?.message || String(res.reason);
+        return {
+          OfficerId: officer.OfficerId,
+          RequestPayload: res.reason?.RequestPayload || null,
+          ResponsePayload: null,
+          ErrorMessage: errMsg,
+        };
+      }
+    });
+
+    // ✅ Bulk insert profiles once per batch
+    await bulkInsertOfficerProfiles(pool, profilesToInsert);
+
     offset += batchSize;
-  } while (batch.length === batchSize);
+  }
 
   console.log(`✅ Finished processing all officers for JobId: ${jobId}`);
 }
-

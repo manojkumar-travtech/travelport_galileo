@@ -1,9 +1,6 @@
-import sql from "mssql";
-import DatabaseConnection from "../database/connection";
+import sql, { ConnectionPool } from "mssql";
 
-export async function createJob(token: string): Promise<number> {
-  const db = DatabaseConnection.getInstance();
-  const pool = await db.connect();
+export async function createJob( pool : ConnectionPool,token: string): Promise<number> {
   const result = await pool
     .request()
     .input("Token", sql.NVarChar, token)
@@ -16,14 +13,13 @@ export async function createJob(token: string): Promise<number> {
 }
 
 export async function updateJobStatus(
+  pool : ConnectionPool,
   jobId: number,
-  status: "Completed" | "Failed",
+  status: "Completed" | "Failed" | "Processing",
   totalRecords?: number,
-  errorMessage?: string
+  errorMessage?: string,
 ): Promise<void> {
-  const db = DatabaseConnection.getInstance();
-  const pool = await db.connect();
-
+ 
   await pool
     .request()
     .input("JobId", sql.Int, jobId)

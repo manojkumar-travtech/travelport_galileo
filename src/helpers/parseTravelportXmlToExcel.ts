@@ -27,15 +27,6 @@ export const parseTravelportGwsOfficersXmlToJson = async (xml: string) => {
   }
 };
 
-interface MergedRecord {
-  LineNum: string;
-  MoveInd: string;
-  SecondaryInd: string;
-  DataType: string;
-  Data: string;
-  XmlResponse: string;
-}
-
 export async function mergeClientFileNodes(xml: string): Promise<string> {
   try {
     // Parse XML
